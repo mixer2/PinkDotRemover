@@ -15,6 +15,8 @@ package org.nodomain.volkerk.PinkDotRemover;
 import java.io.File;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
+import java.util.List;
 import org.nodomain.volkerk.LoggingLib.LoggingClass;
 import org.nodomain.volkerk.SimpleTIFFlib.Generic_CFA_PixBuf;
 import org.nodomain.volkerk.SimpleTIFFlib.ImageFileDirectory;
@@ -254,6 +256,84 @@ public class PinkDotRemover extends LoggingClass {
             int x = dot[0];
             int y = dot[1];
             
+            int newVal;
+            // todo, fix images at pixel borders
+            if ((x < 3) || (x > (w - 4)) || (y < 3) || (y > (h - 4))) continue;
+            
+            //Adaptive pixel defect correction algorithm from
+            //http://www.tanbakuchi.com/Publications/Papers/2003AdaptivePixelDefCorPub.pdf
+            //slightly modified to match our requirements
+            
+            
+            //step 1
+            //read needed pixel values in an array for simple access
+            //we use different indices.
+            //1. di[0] isn't in the array because it isn't used for any calculations
+            //2. indices start with 0 instead of -3. equivalent index for di[-3] on paper is 0 and for di[3] 5.
+            int[][] d = {
+                {srcBuf.CFA_getPixel(x,y-3), srcBuf.CFA_getPixel(x,y-2), srcBuf.CFA_getPixel(x,y-1), srcBuf.CFA_getPixel(x,y+1), srcBuf.CFA_getPixel(x,y+2), srcBuf.CFA_getPixel(x, y+3)},
+                {srcBuf.CFA_getPixel(x-3,y+3), srcBuf.CFA_getPixel(x-2,y+2), srcBuf.CFA_getPixel(x-1,y+1), srcBuf.CFA_getPixel(x+1,y-1), srcBuf.CFA_getPixel(x+2,y-2), srcBuf.CFA_getPixel(x+3, y-3)},
+                {srcBuf.CFA_getPixel(x-3,y), srcBuf.CFA_getPixel(x-2,y), srcBuf.CFA_getPixel(x-1,y), srcBuf.CFA_getPixel(x+1,y), srcBuf.CFA_getPixel(x+2,y), srcBuf.CFA_getPixel(x+3, y)},
+                {srcBuf.CFA_getPixel(x-3,y-3), srcBuf.CFA_getPixel(x-2,y-2), srcBuf.CFA_getPixel(x-1,y-1), srcBuf.CFA_getPixel(x+1,y+1), srcBuf.CFA_getPixel(x+2,y+2), srcBuf.CFA_getPixel(x+3, y+3)}
+            };
+            
+            //step 2
+            //we don't need this step at all, since the af dots aren't complete columns
+            
+            //step 3
+            //locally interpolate defect pixels
+            //just the 6 diagonal pixels at the bottom are checked.
+            //we know that there can't be any defect neighbor pixel
+            //straight to the right or bottom, because of how the
+            //af dots are arranged.
+            //todo:
+            //- check if there are more pixels that don't have to be checked
+            //- i don't think the lists contains method is a performant way to search for a value. maybe we should reorganize the dotList that defective pixels can be checkt via index like dotList[x][y]
+            //- something wrong here. x-1,y+1, x-2, y+2, x-3,y+3 aren't corrected, but paper says they should be. maybe they correct top->bottom, left->right instead of left->right, top->bottom?
+            //- dotList has to be in correct order, which it isn't at the moment, therefore this shouldn't work as expected at the moment
+            
+            List<int[]> dots = Arrays.asList(dotList);
+            for(int[] checkPixel : new int[][] {
+                    {x-1,y+1, 1, 2, d[1][3]},{x-2,y+2, 1, 1, d[1][4]},{x-3,y+3, 1, 0, d[1][5]},
+                    {x+1,y+1, 3, 3, d[3][5]},{x+2,y+2, 3, 4, d[3][1]},{x+3,y+3, 3, 5, d[3][3]}
+                }) {
+                if(dots.contains(new int[] {checkPixel[0], checkPixel[1]})) {
+                   d[checkPixel[2]][checkPixel[3]] = checkPixel[4]; 
+                }
+            }
+            
+            //step 4
+            //normalized to the color plane
+            for(int i = 0; i < 4;i++) {
+                d[i][2] = d[i][1]+((d[i][2]-d[i][0])/2);
+                d[i][3] = d[i][4]+((d[i][3]-d[i][5])/2);
+            }
+            
+            
+            //step 5 & 6
+            //determine edge weight and calculate interpolated value  based on it
+            //todo:
+            //- find good value for k and maybe make it user adjustable
+            //- add k to the calculations
+            int k = 1;
+            int diffSum = 0;
+            int[] vectorPixelDiff = {0,0,0,0};
+            
+            for(int i = 0; i < 4;i++) {
+                vectorPixelDiff[i] = Math.abs(d[i][2]-d[i][3]);
+                diffSum += vectorPixelDiff[i];
+            }
+            
+            newVal = 0;
+            for(int i = 0; i < 4;i++) {
+                float edgeWeight = (1-((float) vectorPixelDiff[i]/diffSum))/3;
+                newVal += edgeWeight*((d[i][2]+d[i][3])/2);
+            }
+            
+            
+            /* keep it for faster alternative interpolation method
+             * todo: add option to choose which interpolation method should be used
+
             // don't fix pixel on image borders
             if ((x < 2) || (x > (w - 3)) || (y < 2) || (y > (h - 4))) continue;
             
@@ -291,7 +371,7 @@ public class PinkDotRemover extends LoggingClass {
             {
                 newVal = (srcBuf.CFA_getPixel(x+2, y-2) + srcBuf.CFA_getPixel(x-2, y+2)) * 0.5;
             }
-
+            */
 
             dstBuf.CFA_setPixel(x, y, (int) newVal);
         }
