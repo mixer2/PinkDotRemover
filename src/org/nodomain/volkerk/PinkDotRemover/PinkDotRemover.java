@@ -250,129 +250,50 @@ public class PinkDotRemover extends LoggingClass {
     {
         int w = (int) srcBuf.imgWidth();
         int h = (int) srcBuf.imgHeight();
-        
+     
         for (int[] dot : dotList)
         {
             int x = dot[0];
-            int y = dot[1];
-            
-            int newVal;
-            // todo, fix images at pixel borders
+            int y = dot[1];        
             if ((x < 3) || (x > (w - 4)) || (y < 3) || (y > (h - 4))) continue;
             
-            //Adaptive pixel defect correction algorithm from
+            //Modified adaptive pixel defect correction algorithm from
             //http://www.tanbakuchi.com/Publications/Papers/2003AdaptivePixelDefCorPub.pdf
-            //slightly modified to match our requirements
+            //Takes to account only two vectors (horizontal and vertical)
+            //Not entirely shure why, but this gives better results in all methods i've tried (both high-frequency false colors and edges treatment)
+            //Maybe simply because of squared nature of raster images themselves
             
-            
-            //step 1
-            //read needed pixel values in an array for simple access
-            //we use different indices.
-            //1. di[0] isn't in the array because it isn't used for any calculations
-            //2. indices start with 0 instead of -3. equivalent index for di[-3] on paper is 0 and for di[3] 5.
-            int[][] d = {
+            // 1. Retrieve vectors from 7x7 kernel
+            // d[0] — vertical vector
+            // d[1] — horizontal vector
+            // index reference:
+            //        paper     -3 -2 -1 0 +1 +2 +3
+            //        actual     0  1  2    3  4  5
+                int[][] d = {
                 {srcBuf.CFA_getPixel(x,y-3), srcBuf.CFA_getPixel(x,y-2), srcBuf.CFA_getPixel(x,y-1), srcBuf.CFA_getPixel(x,y+1), srcBuf.CFA_getPixel(x,y+2), srcBuf.CFA_getPixel(x, y+3)},
-                {srcBuf.CFA_getPixel(x-3,y+3), srcBuf.CFA_getPixel(x-2,y+2), srcBuf.CFA_getPixel(x-1,y+1), srcBuf.CFA_getPixel(x+1,y-1), srcBuf.CFA_getPixel(x+2,y-2), srcBuf.CFA_getPixel(x+3, y-3)},
-                {srcBuf.CFA_getPixel(x-3,y), srcBuf.CFA_getPixel(x-2,y), srcBuf.CFA_getPixel(x-1,y), srcBuf.CFA_getPixel(x+1,y), srcBuf.CFA_getPixel(x+2,y), srcBuf.CFA_getPixel(x+3, y)},
-                {srcBuf.CFA_getPixel(x-3,y-3), srcBuf.CFA_getPixel(x-2,y-2), srcBuf.CFA_getPixel(x-1,y-1), srcBuf.CFA_getPixel(x+1,y+1), srcBuf.CFA_getPixel(x+2,y+2), srcBuf.CFA_getPixel(x+3, y+3)}
-            };
+                {srcBuf.CFA_getPixel(x-3,y), srcBuf.CFA_getPixel(x-2,y), srcBuf.CFA_getPixel(x-1,y), srcBuf.CFA_getPixel(x+1,y), srcBuf.CFA_getPixel(x+2,y), srcBuf.CFA_getPixel(x+3, y)}
+                };
             
-            //step 2
-            //we don't need this step at all, since the af dots aren't complete columns
+            // 2,3 — We don't need these stepse because of diagonal af dots arrangement
+                
+            // 4. Normalizing vectors
+                // vertical norm.
+                d[0][2] = d[0][1]+((d[0][2]-d[0][0])/2);
+                d[0][3] = d[0][4]+((d[0][3]-d[0][5])/2);
+                // horizontal norm.
+                d[1][2] = d[1][1]+((d[1][2]-d[1][0])/2);
+                d[1][3] = d[1][4]+((d[1][3]-d[1][5])/2);           
             
-            //step 3
-            //locally interpolate defect pixels
-            //just the 6 diagonal pixels at the bottom are checked.
-            //we know that there can't be any defect neighbor pixel
-            //straight to the right or bottom, because of how the
-            //af dots are arranged.
-            //todo:
-            //- check if there are more pixels that don't have to be checked
-            //- i don't think the lists contains method is a performant way to search for a value. maybe we should reorganize the dotList that defective pixels can be checkt via index like dotList[x][y]
-            //- something wrong here. x-1,y+1, x-2, y+2, x-3,y+3 aren't corrected, but paper says they should be. maybe they correct top->bottom, left->right instead of left->right, top->bottom?
-            //- dotList has to be in correct order, which it isn't at the moment, therefore this shouldn't work as expected at the moment
+            // 5. Deltas and Weights
+            int dVert = Math.abs(d[0][2]-d[0][3]);
+            int dHoriz = Math.abs(d[1][2]-d[1][3]);
+            int Delta = dVert + dHoriz;
             
-            List<int[]> dots = Arrays.asList(dotList);
-            for(int[] checkPixel : new int[][] {
-                    {x-1,y+1, 1, 2, d[1][3]},{x-2,y+2, 1, 1, d[1][4]},{x-3,y+3, 1, 0, d[1][5]},
-                    {x+1,y+1, 3, 3, d[3][5]},{x+2,y+2, 3, 4, d[3][1]},{x+3,y+3, 3, 5, d[3][3]}
-                }) {
-                if(dots.contains(new int[] {checkPixel[0], checkPixel[1]})) {
-                   d[checkPixel[2]][checkPixel[3]] = checkPixel[4]; 
-                }
-            }
-            
-            //step 4
-            //normalized to the color plane
-            for(int i = 0; i < 4;i++) {
-                d[i][2] = d[i][1]+((d[i][2]-d[i][0])/2);
-                d[i][3] = d[i][4]+((d[i][3]-d[i][5])/2);
-            }
-            
-            
-            //step 5 & 6
-            //determine edge weight and calculate interpolated value  based on it
-            //todo:
-            //- find good value for k and maybe make it user adjustable
-            //- add k to the calculations
-            int k = 1;
-            int diffSum = 0;
-            int[] vectorPixelDiff = {0,0,0,0};
-            
-            for(int i = 0; i < 4;i++) {
-                vectorPixelDiff[i] = Math.abs(d[i][2]-d[i][3]);
-                diffSum += vectorPixelDiff[i];
-            }
-            
-            newVal = 0;
-            for(int i = 0; i < 4;i++) {
-                float edgeWeight = (1-((float) vectorPixelDiff[i]/diffSum))/3;
-                newVal += edgeWeight*((d[i][2]+d[i][3])/2);
-            }
-            
-            
-            /* keep it for faster alternative interpolation method
-             * todo: add option to choose which interpolation method should be used
+            float wVert = 1-((float) dVert / Delta);
+            float wHoriz = 1-((float) dHoriz / Delta);
 
-            // don't fix pixel on image borders
-            if ((x < 2) || (x > (w - 3)) || (y < 2) || (y > (h - 4))) continue;
-            
-            // determine intensity gradients in all four directions
-            int g1 = srcBuf.CFA_getPixel(x, y - 2) - srcBuf.CFA_getPixel(x, y + 2); // top-down
-            int g2 = srcBuf.CFA_getPixel(x - 2, y) - srcBuf.CFA_getPixel(x + 2, y); // left-right
-            int g3 = srcBuf.CFA_getPixel(x - 2, y - 2) - srcBuf.CFA_getPixel(x + 2, y + 2); // top-left, down-right
-            int g4 = srcBuf.CFA_getPixel(x + 2, y - 2) - srcBuf.CFA_getPixel(x - 2, y + 2); // top-right, down-left
-            
-            // find the minimum gradient
-            g1 = Math.abs(g1);
-            g2 = Math.abs(g2);
-            g3 = Math.abs(g3);
-            g4 = Math.abs(g4);
-            
-            int minG = Math.min(g1, g2);
-            minG = Math.min(minG, g3);
-            minG = Math.min(minG, g4);
-            
-            // use the minimum gradient for interpolation
-            double newVal;
-            if (minG == g1)
-            {
-                newVal = (srcBuf.CFA_getPixel(x, y - 2) + srcBuf.CFA_getPixel(x, y + 2)) * 0.5;
-            }
-            else if (minG == g2)
-            {
-                newVal = (srcBuf.CFA_getPixel(x-2, y) + srcBuf.CFA_getPixel(x+2, y)) * 0.5;
-            }
-            else if (minG == g3)
-            {
-                newVal = (srcBuf.CFA_getPixel(x-2, y-2) + srcBuf.CFA_getPixel(x+2, y+2)) * 0.5;
-            }
-            else
-            {
-                newVal = (srcBuf.CFA_getPixel(x+2, y-2) + srcBuf.CFA_getPixel(x-2, y+2)) * 0.5;
-            }
-            */
-
+            // 6. Calculating new pixel value
+            float newVal = wVert*((d[0][2]+d[0][3])/2) + wHoriz*((d[1][2]+d[1][3])/2);
             dstBuf.CFA_setPixel(x, y, (int) newVal);
         }
         
