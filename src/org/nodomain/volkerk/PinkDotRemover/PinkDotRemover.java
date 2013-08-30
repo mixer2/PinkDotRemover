@@ -254,7 +254,26 @@ public class PinkDotRemover extends LoggingClass {
         for (int[] dot : dotList)
         {
             int x = dot[0];
-            int y = dot[1];        
+            int y = dot[1];
+            if ((x < 3) && (y > 3) && (y < (h - 4))) {
+                int p1 = srcBuf.CFA_getPixel(x,y-2); int p2 = srcBuf.CFA_getPixel(x,y+2);
+                dstBuf.CFA_setPixel(x, y, (int) ((p1+p2)/2));
+               };
+            
+            if ((x < (w-4)) && (y > 3) && (y < (h - 4))) {
+                int p1 = srcBuf.CFA_getPixel(x,y-2); int p2 = srcBuf.CFA_getPixel(x,y+2);
+                dstBuf.CFA_setPixel(x, y, (int) ((p1+p2)/2));
+               };
+            
+            if ((y > (h-4)) && (x > 3) && (x < w-4)) {
+                int p1 = srcBuf.CFA_getPixel(x-2,y); int p2 = srcBuf.CFA_getPixel(x+2,y);
+                dstBuf.CFA_setPixel(x, y, (int) ((p1+p2)/2));
+            };
+            
+            if ((y < 3) && (x > 3) && (x < w-4)) {
+                int p1 = srcBuf.CFA_getPixel(x-2,y); int p2 = srcBuf.CFA_getPixel(x+2,y);
+                dstBuf.CFA_setPixel(x, y, (int) ((p1+p2)/2));
+            };
             if ((x < 3) || (x > (w - 4)) || (y < 3) || (y > (h - 4))) continue;
             
             //Modified adaptive pixel defect correction algorithm from
